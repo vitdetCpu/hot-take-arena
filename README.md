@@ -16,7 +16,7 @@ Real-time multiplayer opinion battle game. One person hosts on a big screen, eve
 - **Frontend:** React 19, Vite, Tailwind CSS v4
 - **Backend:** Express, Socket.IO
 - **AI Judge:** MiniMax M2 (streaming, parallel batched)
-- **Voice Input:** Web Speech API (browser-native, free)
+- **Voice Input:** Speechmatics (enhanced accuracy, batch API)
 
 ## Setup
 
@@ -25,13 +25,16 @@ npm install
 cp .env.example .env
 ```
 
-Add your API key to `.env`:
+Add your API keys to `.env`:
 
 ```
 MINIMAX_API_KEY=your-key-here
+SPEECHMATICS_API_KEY=your-key-here
 ```
 
-Get your key from: https://www.minimax.io
+Get your keys from:
+- MiniMax: https://www.minimax.io
+- Speechmatics: https://portal.speechmatics.com (8 free hours/month)
 
 ## Run
 
@@ -72,6 +75,7 @@ client/          React frontend (Vite)
 server/
   index.js       Express + Socket.IO server, room management
   minimax.js     AI judge with parallel batched streaming
+  transcribe.js  Speechmatics speech-to-text
 ```
 
 ### How AI Judging Works

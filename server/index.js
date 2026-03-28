@@ -26,9 +26,30 @@ app.use(express.static(path.join(__dirname, "..", "dist")));
 // REST API: Speech-to-text via fal Whisper
 // ---------------------------------------------------------------------------
 
+// Simple per-IP rate limiter for transcription endpoint
+const transcribeRateMap = new Map();
+const RATE_LIMIT_WINDOW = 60_000;
+const RATE_LIMIT_MAX = 5;
+
+function checkTranscribeRate(ip) {
+  const now = Date.now();
+  const entry = transcribeRateMap.get(ip) || { count: 0, reset: now + RATE_LIMIT_WINDOW };
+  if (now > entry.reset) {
+    entry.count = 0;
+    entry.reset = now + RATE_LIMIT_WINDOW;
+  }
+  entry.count++;
+  transcribeRateMap.set(ip, entry);
+  return entry.count <= RATE_LIMIT_MAX;
+}
+
 // Accept raw audio body (up to 10MB)
 app.post("/api/transcribe", express.raw({ type: "audio/*", limit: "10mb" }), async (req, res) => {
   try {
+    if (!checkTranscribeRate(req.ip)) {
+      return res.status(429).json({ error: "Too many requests. Try again in a minute." });
+    }
+
     if (!req.body || req.body.length === 0) {
       return res.status(400).json({ error: "No audio data received" });
     }
@@ -37,7 +58,7 @@ app.post("/api/transcribe", express.raw({ type: "audio/*", limit: "10mb" }), asy
     res.json({ text });
   } catch (err) {
     console.error("[transcribe] error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Transcription failed. Please try again." });
   }
 });
 
@@ -104,6 +125,8 @@ function createRoom(hostSocketId) {
 
 // Reverse lookup: socketId → roomCode (for disconnect cleanup)
 const socketRoomMap = new Map();
+
+const PORT = process.env.PORT || 3001;
 
 // ---------------------------------------------------------------------------
 // Utility: detect local network IP
@@ -205,7 +228,7 @@ io.on("connection", (socket) => {
       room.phase = "submitting";
       room.results = [];
       io.to(roomCode).emit("room:judging-error", {
-        message: err.message || "AI judging failed",
+        message: "AI judging failed. Please retry.",
       });
     }
   });
@@ -247,18 +270,22 @@ io.on("connection", (socket) => {
       typeof playerName === "string" ? playerName.trim().slice(0, 30) : "Anon";
     const safeName = name || "Anon";
 
-    // Check for reconnection: if a player with the same name exists AND their
-    // socket is disconnected, restore their state (submission) so they don't
-    // lose progress. Only evict if the old socket is truly gone.
+    // Check for reconnection or name conflict
     let existingSubmission = null;
     for (const [existingId, player] of room.players) {
       if (player.name === safeName) {
+        // If the old socket is still connected, reject the duplicate name
         const existingSocket = io.sockets.sockets.get(existingId);
-        if (!existingSocket || !existingSocket.connected) {
-          existingSubmission = player.submission;
-          room.players.delete(existingId);
-          socketRoomMap.delete(existingId);
+        if (existingSocket && existingSocket.connected) {
+          socket.emit("error:room-not-found", {
+            message: `Name "${safeName}" is already taken in this room`,
+          });
+          return;
         }
+        // Old socket is disconnected — restore their submission (reconnect)
+        existingSubmission = player.submission;
+        room.players.delete(existingId);
+        socketRoomMap.delete(existingId);
         break;
       }
     }
@@ -266,11 +293,12 @@ io.on("connection", (socket) => {
     room.players.set(socket.id, {
       name: safeName,
       submission: existingSubmission,
+      connected: true,
     });
     socket.join(code);
     socketRoomMap.set(socket.id, code);
 
-    const playerCount = room.players.size;
+    const playerCount = [...room.players.values()].filter((p) => p.connected !== false).length;
     console.log(`[room ${code}] ${name} joined (${playerCount} players)`);
     io.to(code).emit("room:player-joined", {
       playerName: name,
@@ -340,34 +368,45 @@ io.on("connection", (socket) => {
     const roomCode = socketRoomMap.get(socket.id);
     if (!roomCode) return;
 
-    socketRoomMap.delete(socket.id);
     const room = rooms.get(roomCode);
     if (!room) return;
 
     const player = room.players.get(socket.id);
-    room.players.delete(socket.id);
-
-    const playerCount = room.players.size;
 
     if (player) {
+      // Mark as disconnected instead of deleting — allows reconnection
+      player.connected = false;
+      player.disconnectedAt = Date.now();
+
+      // Clean up after 60s if not reconnected
+      setTimeout(() => {
+        const p = room.players.get(socket.id);
+        if (p && !p.connected) {
+          room.players.delete(socket.id);
+          socketRoomMap.delete(socket.id);
+        }
+      }, 60_000);
+
+      const connectedCount = [...room.players.values()].filter((p) => p.connected !== false).length;
       console.log(
-        `[room ${roomCode}] ${player.name} disconnected (${playerCount} remaining)`
+        `[room ${roomCode}] ${player.name} disconnected (${connectedCount} connected)`
       );
       io.to(roomCode).emit("room:player-left", {
         playerName: player.name,
-        playerCount,
+        playerCount: connectedCount,
       });
     }
 
     // If the host disconnected, notify remaining players
     if (socket.id === room.hostSocketId) {
-      if (playerCount === 0) {
+      const connectedCount = [...room.players.values()].filter((p) => p.connected !== false).length;
+      if (connectedCount === 0) {
         rooms.delete(roomCode);
         console.log(`[room ${roomCode}] deleted (host left, no players)`);
       } else {
         io.to(roomCode).emit("room:host-disconnected");
         console.log(
-          `[room ${roomCode}] host disconnected, ${playerCount} players notified`
+          `[room ${roomCode}] host disconnected, ${connectedCount} players notified`
         );
       }
     }
@@ -377,8 +416,6 @@ io.on("connection", (socket) => {
 // ---------------------------------------------------------------------------
 // Start server
 // ---------------------------------------------------------------------------
-
-const PORT = process.env.PORT || 3001;
 
 httpServer.listen(PORT, () => {
   const localIP = getLocalIP();

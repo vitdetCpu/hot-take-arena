@@ -142,22 +142,33 @@ export default function PlayerView() {
   // ---------------------------------------------------------------------------
   // Voice input (fal Whisper STT)
   // ---------------------------------------------------------------------------
+  const isRecordingRef = useRef(false);
+
   const handleMicToggle = useCallback(async () => {
-    if (isRecording) {
+    if (isRecordingRef.current) {
       // Stop recording
       mediaRecorderRef.current?.stop();
+      isRecordingRef.current = false;
       setIsRecording(false);
       return;
     }
 
+    // Feature detection
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setSubmitError('Voice input not supported on this browser');
+      return;
+    }
+
     // Start recording
+    isRecordingRef.current = true;
+    setIsRecording(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm',
-      });
+
+      // Pick best supported mime type (iOS Safari needs mp4, not webm)
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac']
+        .find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -196,11 +207,12 @@ export default function PlayerView() {
       };
 
       mediaRecorder.start();
-      setIsRecording(true);
     } catch {
+      isRecordingRef.current = false;
+      setIsRecording(false);
       setSubmitError('Microphone access denied');
     }
-  }, [isRecording]);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Character count color

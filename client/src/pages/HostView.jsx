@@ -303,6 +303,7 @@ export default function HostView() {
               disabled={!promptText.trim()}
               className="btn-gradient w-full py-4 rounded-xl text-xl font-bold text-white
                          tracking-wider uppercase cursor-pointer"
+              aria-label="Lock in the prompt and start accepting submissions"
             >
               Lock &amp; Go
             </button>
@@ -354,6 +355,7 @@ export default function HostView() {
             className={`btn-gradient px-12 py-5 rounded-xl text-2xl font-bold text-white
                        tracking-wider uppercase cursor-pointer
                        ${submissionCount >= 2 ? 'animate-pulse-glow' : ''}`}
+            aria-label="Start AI judging of all submissions"
           >
             Judge!
           </button>

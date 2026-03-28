@@ -79,7 +79,7 @@ function createRoom(hostSocketId) {
     hostSecret: crypto.randomUUID(),
     players: new Map(), // socketId → { name, submission }
     prompt: null,
-    phase: "lobby", // 'lobby' | 'prompting' | 'submitting' | 'judging' | 'results'
+    phase: "lobby", // 'lobby' | 'submitting' | 'judging' | 'results'
     results: [],
   };
 }
@@ -378,9 +378,8 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Server-side validation (client enforces 280, but validate here too)
     const trimmed = typeof text === "string" ? text.trim() : "";
-    if (!trimmed || trimmed.length > 500) {
+    if (!trimmed || trimmed.length > 300) {
       socket.emit("error:invalid-submission", {
         message: "Submission must be 1-500 characters",
       });
@@ -430,6 +429,7 @@ io.on("connection", (socket) => {
 
       // Clean up after 60s if not reconnected
       setTimeout(() => {
+        if (!rooms.has(roomCode)) return; // Room already deleted
         const p = room.players.get(socket.id);
         if (p && !p.connected) {
           room.players.delete(socket.id);
@@ -484,4 +484,7 @@ httpServer.listen(PORT, () => {
   console.log(`\n  Hot Take Arena server running!\n`);
   console.log(`  Local:   http://localhost:${PORT}`);
   console.log(`  Network: http://${localIP}:${PORT}\n`);
+  if (!process.env.MINIMAX_API_KEY) {
+    console.warn("  ⚠  MINIMAX_API_KEY not set — AI judging will fail. Add it to .env\n");
+  }
 });

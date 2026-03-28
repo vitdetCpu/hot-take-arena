@@ -20,17 +20,14 @@ const PARTICLE_COLORS = [
   '#22c55e',
 ];
 
-/**
- * Generate the endpoint translate for each particle, evenly distributed
- * around a circle.
- */
-function getParticleEndpoint(index, total) {
-  const angle = (index / total) * 2 * Math.PI;
+// Pre-compute particle endpoints so they don't change on re-render
+const PARTICLE_ENDPOINTS = PARTICLE_COLORS.map((_, i) => {
+  const angle = (i / PARTICLE_COLORS.length) * 2 * Math.PI;
   const distance = 60 + Math.random() * 30; // 60-90px
   const x = Math.cos(angle) * distance;
   const y = Math.sin(angle) * distance;
   return `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px)`;
-}
+});
 
 export default function WinnerCrown({ visible }) {
   if (!visible) return null;
@@ -55,7 +52,6 @@ export default function WinnerCrown({ visible }) {
         style={{ fontSize: '2.5rem', lineHeight: 1 }}
         aria-hidden="true"
       >
-        {/* Using a text crown character */}
         <span className="text-gradient-purple-pink" style={{ WebkitTextFillColor: '#fbbf24' }}>
           &#9812;
         </span>
@@ -74,7 +70,7 @@ export default function WinnerCrown({ visible }) {
             left: '50%',
             marginTop: '-4px',
             marginLeft: '-4px',
-            '--particle-end': getParticleEndpoint(i, PARTICLE_COLORS.length),
+            '--particle-end': PARTICLE_ENDPOINTS[i],
             animationDelay: `${i * 50}ms`,
           }}
         />

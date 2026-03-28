@@ -72,11 +72,6 @@ export default function PlayerView() {
       setPhase('joining');
     });
 
-    socket.on('room:player-joined', ({ playerName: name, playerCount }) => {
-      // Check if this is our own join confirmation (server echoes to room)
-      // We transition to waiting after emitting join — see handleJoin
-    });
-
     socket.on('room:prompt', ({ prompt: p }) => {
       setPrompt(p);
       setPhase('submitting');
@@ -106,9 +101,11 @@ export default function PlayerView() {
       });
     });
 
-    socket.on('room:host-reconnected', () => {
+    socket.on('room:host-reconnected', ({ phase: serverPhase }) => {
       setPhase((prev) => {
         if (prev === 'host-disconnected') {
+          // Use server phase if available, otherwise restore saved phase
+          if (serverPhase === 'submitting') return socket._preDisconnectPhase || 'submitting';
           return socket._preDisconnectPhase || 'waiting';
         }
         return prev;

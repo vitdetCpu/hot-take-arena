@@ -131,10 +131,17 @@ function extractJsonObjects(buffer) {
  * @param {Function} onRoast      - Called with { index, playerName, roast, score }
  * @returns {Promise<Array>}      - Resolves with all parsed roast objects
  */
+const MAX_SUBMISSIONS = 50;
+
 export async function judgeSubmissions(prompt, submissions, onRoast) {
   if (!submissions || submissions.length === 0) {
     return [];
   }
+
+  // Cap submissions to avoid exceeding AI context window
+  const capped = submissions.length > MAX_SUBMISSIONS
+    ? submissions.slice(0, MAX_SUBMISSIONS)
+    : submissions;
 
   const client = getClient();
 
@@ -144,7 +151,7 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
       model: "MiniMax-M2",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildUserPrompt(prompt, submissions) },
+        { role: "user", content: buildUserPrompt(prompt, capped) },
       ],
       stream: true,
     });
@@ -153,9 +160,9 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
   }
 
   // Build lookups so we can attach playerName, text, and socketId from submissions
-  const playerLookup = new Map(submissions.map((s) => [s.index, s.playerName]));
-  const textLookup = new Map(submissions.map((s) => [s.index, s.text]));
-  const socketLookup = new Map(submissions.map((s) => [s.index, s.socketId]));
+  const playerLookup = new Map(capped.map((s) => [s.index, s.playerName]));
+  const textLookup = new Map(capped.map((s) => [s.index, s.text]));
+  const socketLookup = new Map(capped.map((s) => [s.index, s.socketId]));
 
   let buffer = "";
   const allResults = [];

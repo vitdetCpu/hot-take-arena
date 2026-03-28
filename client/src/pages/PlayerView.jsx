@@ -65,6 +65,15 @@ export default function PlayerView() {
       setPhase('submitting');
     });
 
+    socket.on('error:not-submitting', ({ message }) => {
+      setSubmitError(message || 'Not accepting submissions');
+    });
+
+    socket.on('error:name-taken', ({ message }) => {
+      setJoinError(message || 'Name already taken');
+      setPhase('joining');
+    });
+
     socket.on('room:player-joined', ({ playerName: name, playerCount }) => {
       // Check if this is our own join confirmation (server echoes to room)
       // We transition to waiting after emitting join — see handleJoin

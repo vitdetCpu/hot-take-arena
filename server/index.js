@@ -127,6 +127,15 @@ function createRoom(hostSocketId) {
 const socketRoomMap = new Map();
 
 const PORT = process.env.PORT || 3001;
+const MAX_PLAYERS_PER_ROOM = 150;
+
+// Clean up stale rate-limit entries every 60s
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of transcribeRateMap) {
+    if (now > entry.reset) transcribeRateMap.delete(ip);
+  }
+}, 60_000);
 
 // ---------------------------------------------------------------------------
 // Utility: detect local network IP
@@ -164,22 +173,28 @@ io.on("connection", (socket) => {
 
     const localIP = getLocalIP();
     console.log(`[room] ${roomCode} created by ${socket.id}`);
-    socket.emit("room:created", { roomCode, localIP, port: PORT });
+    socket.emit("room:created", { roomCode, localIP });
   });
 
   socket.on("host:push-prompt", ({ roomCode, prompt }) => {
     const room = rooms.get(roomCode);
-    if (!room) return;
+    if (!room || room.hostSocketId !== socket.id) return;
+    if (room.phase !== "lobby") return;
 
-    room.prompt = prompt;
+    // Validate prompt
+    const safePrompt = typeof prompt === "string" ? prompt.trim().slice(0, 500) : "";
+    if (!safePrompt) return;
+
+    room.prompt = safePrompt;
     room.phase = "submitting";
     console.log(`[room ${roomCode}] prompt set, phase → submitting`);
-    io.to(roomCode).emit("room:prompt", { prompt });
+    io.to(roomCode).emit("room:prompt", { prompt: safePrompt });
   });
 
   socket.on("host:start-judging", async ({ roomCode }) => {
     const room = rooms.get(roomCode);
-    if (!room) return;
+    if (!room || room.hostSocketId !== socket.id) return;
+    if (room.phase !== "submitting") return;
 
     room.phase = "judging";
     console.log(`[room ${roomCode}] phase → judging`);
@@ -188,7 +203,7 @@ io.on("connection", (socket) => {
     const submissions = [];
     let idx = 1;
     for (const [socketId, player] of room.players) {
-      if (player.submission) {
+      if (player.submission && player.connected !== false) {
         submissions.push({
           index: idx,
           playerName: player.name,
@@ -206,14 +221,21 @@ io.on("connection", (socket) => {
     }
 
     try {
-      const results = await judgeSubmissions(
-        room.prompt,
-        submissions,
-        (roast) => {
-          room.results.push(roast);
-          io.to(roomCode).emit("room:roast", roast);
-        }
+      // Race against a 90s timeout to prevent indefinite hangs
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("AI judging timed out after 90s")), 90_000)
       );
+      const results = await Promise.race([
+        judgeSubmissions(
+          room.prompt,
+          submissions,
+          (roast) => {
+            room.results.push(roast);
+            io.to(roomCode).emit("room:roast", roast);
+          }
+        ),
+        timeoutPromise,
+      ]);
 
       room.phase = "results";
       console.log(
@@ -235,7 +257,7 @@ io.on("connection", (socket) => {
 
   socket.on("host:next-round", ({ roomCode }) => {
     const room = rooms.get(roomCode);
-    if (!room) return;
+    if (!room || room.hostSocketId !== socket.id) return;
 
     // Reset for next round
     for (const [, player] of room.players) {
@@ -270,6 +292,15 @@ io.on("connection", (socket) => {
       typeof playerName === "string" ? playerName.trim().slice(0, 30) : "Anon";
     const safeName = name || "Anon";
 
+    // Player cap check
+    const connectedPlayerCount = [...room.players.values()].filter((p) => p.connected !== false).length;
+    if (connectedPlayerCount >= MAX_PLAYERS_PER_ROOM) {
+      socket.emit("error:room-not-found", {
+        message: "Room is full",
+      });
+      return;
+    }
+
     // Check for reconnection or name conflict
     let existingSubmission = null;
     for (const [existingId, player] of room.players) {
@@ -277,7 +308,7 @@ io.on("connection", (socket) => {
         // If the old socket is still connected, reject the duplicate name
         const existingSocket = io.sockets.sockets.get(existingId);
         if (existingSocket && existingSocket.connected) {
-          socket.emit("error:room-not-found", {
+          socket.emit("error:name-taken", {
             message: `Name "${safeName}" is already taken in this room`,
           });
           return;

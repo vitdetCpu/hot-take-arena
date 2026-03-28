@@ -51,7 +51,9 @@ export default function HostView() {
     // Auto-create room on mount
     socket.emit('host:create-room');
 
-    socket.on('room:created', ({ roomCode: code, localIP: ip }) => {
+    socket.on('room:created', ({ roomCode: code, localIP: ip, hostSecret }) => {
+      socket._roomCode = code; // Store for reconnection
+      socket._hostSecret = hostSecret;
       setRoomCode(code);
       setLocalIP(ip);
     });
@@ -101,6 +103,29 @@ export default function HostView() {
       setWinnerIndex(-1);
       setShowShake(false);
       setJudgingError(null);
+    });
+
+    // Auto-reconnect: re-associate this socket as the host
+    socket.on('connect', () => {
+      const code = socket._roomCode;
+      if (code) {
+        socket.emit('host:reconnect', { roomCode: code, hostSecret: socket._hostSecret });
+      }
+    });
+
+    socket.on('host:reconnected', ({ roomCode: code, phase: serverPhase, prompt, playerCount: count, submissionCount: subCount, results: existingResults }) => {
+      setRoomCode(code);
+      setPlayerCount(count);
+      if (prompt) setPromptText(prompt);
+      if (subCount !== undefined) setSubmissionCount(subCount);
+      if (existingResults?.length) {
+        setResults(existingResults.sort((a, b) => a.score - b.score));
+      }
+      if (serverPhase === 'results') setJudgingComplete(true);
+      if (serverPhase === 'submitting' || serverPhase === 'judging' || serverPhase === 'results') {
+        setPhase(serverPhase);
+      }
+      console.log(`[host] reconnected to room ${code} (phase: ${serverPhase})`);
     });
 
     return () => {

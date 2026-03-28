@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 import { judgeSubmissions } from "./minimax.js";
 import { transcribeAudio } from "./transcribe.js";
 
@@ -116,6 +117,7 @@ function generateRoomCode() {
 function createRoom(hostSocketId) {
   return {
     hostSocketId,
+    hostSecret: crypto.randomUUID(),
     players: new Map(), // socketId → { name, submission }
     prompt: null,
     phase: "lobby", // 'lobby' | 'prompting' | 'submitting' | 'judging' | 'results'
@@ -173,7 +175,44 @@ io.on("connection", (socket) => {
 
     const localIP = getLocalIP();
     console.log(`[room] ${roomCode} created by ${socket.id}`);
-    socket.emit("room:created", { roomCode, localIP });
+    socket.emit("room:created", { roomCode, localIP, hostSecret: room.hostSecret });
+  });
+
+  socket.on("host:reconnect", ({ roomCode, hostSecret }) => {
+    const code = roomCode?.toUpperCase?.() ?? roomCode;
+    const room = rooms.get(code);
+    if (!room) {
+      socket.emit("error:room-not-found", { message: `Room ${roomCode} does not exist` });
+      return;
+    }
+
+    // Verify the caller is the actual host
+    if (room.hostSecret !== hostSecret) {
+      socket.emit("error:room-not-found", { message: "Invalid host credentials" });
+      return;
+    }
+
+    // Clean up old host entry from socketRoomMap
+    socketRoomMap.delete(room.hostSocketId);
+
+    // Update host socket ID to the new connection
+    room.hostSocketId = socket.id;
+    socket.join(code);
+    socketRoomMap.set(socket.id, code);
+
+    const connectedPlayers = [...room.players.values()].filter((p) => p.connected !== false);
+    const playerCount = connectedPlayers.length;
+    const submissionCount = connectedPlayers.filter((p) => p.submission).length;
+    console.log(`[room ${code}] host reconnected as ${socket.id} (${playerCount} players)`);
+    socket.emit("host:reconnected", {
+      roomCode: code,
+      phase: room.phase,
+      prompt: room.prompt,
+      playerCount,
+      submissionCount,
+      results: room.results,
+    });
+    io.to(code).emit("room:host-reconnected", { phase: room.phase });
   });
 
   socket.on("host:push-prompt", ({ roomCode, prompt }) => {
@@ -197,6 +236,7 @@ io.on("connection", (socket) => {
     if (room.phase !== "submitting") return;
 
     room.phase = "judging";
+    room.results = []; // Clear stale results from any previous attempt
     console.log(`[room ${roomCode}] phase → judging`);
 
     // Build submissions array with socketId for player identification
@@ -228,13 +268,16 @@ io.on("connection", (socket) => {
       io.to(roomCode).emit("room:roast", roast);
     };
 
-    const timeoutId = setTimeout(() => { aborted = true; }, 90_000);
+    // Single unified 90s timeout — sets abort flag AND rejects the promise
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        aborted = true;
+        reject(new Error("AI judging timed out after 90s"));
+      }, 90_000);
+    });
 
     try {
-      // Race against a 90s timeout to prevent indefinite hangs
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI judging timed out after 90s")), 90_000)
-      );
       const results = await Promise.race([
         judgeSubmissions(room.prompt, submissions, safeOnRoast),
         timeoutPromise,
@@ -451,17 +494,24 @@ io.on("connection", (socket) => {
       });
     }
 
-    // If the host disconnected, notify remaining players
+    // If the host disconnected, give 30s grace period for reconnection
     if (socket.id === room.hostSocketId) {
       const connectedCount = [...room.players.values()].filter((p) => p.connected !== false).length;
       if (connectedCount === 0) {
         rooms.delete(roomCode);
         console.log(`[room ${roomCode}] deleted (host left, no players)`);
       } else {
-        io.to(roomCode).emit("room:host-disconnected");
         console.log(
-          `[room ${roomCode}] host disconnected, ${connectedCount} players notified`
+          `[room ${roomCode}] host disconnected, waiting 30s for reconnection`
         );
+        const oldHostId = socket.id;
+        setTimeout(() => {
+          // If host hasn't reconnected (hostSocketId unchanged), notify players
+          if (room.hostSocketId === oldHostId) {
+            io.to(roomCode).emit("room:host-disconnected");
+            console.log(`[room ${roomCode}] host did not reconnect, players notified`);
+          }
+        }, 30_000);
       }
     }
   });

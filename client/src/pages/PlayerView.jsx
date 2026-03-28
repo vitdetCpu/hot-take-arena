@@ -102,7 +102,19 @@ export default function PlayerView() {
     });
 
     socket.on('room:host-disconnected', () => {
-      setPhase('host-disconnected');
+      setPhase((prev) => {
+        socket._preDisconnectPhase = prev;
+        return 'host-disconnected';
+      });
+    });
+
+    socket.on('room:host-reconnected', () => {
+      setPhase((prev) => {
+        if (prev === 'host-disconnected') {
+          return socket._preDisconnectPhase || 'waiting';
+        }
+        return prev;
+      });
     });
 
     socket.on('room:judging-error', () => {

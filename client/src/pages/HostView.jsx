@@ -39,6 +39,7 @@ export default function HostView() {
   const [judgingComplete, setJudgingComplete] = useState(false);
   const [winnerIndex, setWinnerIndex] = useState(-1);
   const [showShake, setShowShake] = useState(false);
+  const [judgingError, setJudgingError] = useState(null);
 
   // ---------------------------------------------------------------------------
   // Socket.IO setup
@@ -85,6 +86,11 @@ export default function HostView() {
       setJudgingComplete(true);
     });
 
+    socket.on('room:judging-error', ({ message }) => {
+      setJudgingError(message || 'AI judging failed');
+      setPhase('submitting'); // Go back so host can retry
+    });
+
     socket.on('room:reset', () => {
       setPhase('lobby');
       setPromptText('');
@@ -94,6 +100,7 @@ export default function HostView() {
       setJudgingComplete(false);
       setWinnerIndex(-1);
       setShowShake(false);
+      setJudgingError(null);
     });
 
     return () => {
@@ -144,6 +151,7 @@ export default function HostView() {
     setResults([]);
     setJudgingComplete(false);
     setWinnerIndex(-1);
+    setJudgingError(null);
   }, [roomCode]);
 
   const handleNextRound = useCallback(() => {
@@ -154,8 +162,11 @@ export default function HostView() {
   // ---------------------------------------------------------------------------
   // Build the join URL for the QR code
   // ---------------------------------------------------------------------------
+  // Use the host's current port — in dev that's 5173 (Vite), in production
+  // that's 3001 (Express). Players need the same port to reach the frontend.
+  const portSuffix = window.location.port ? `:${window.location.port}` : '';
   const joinUrl = localIP && roomCode
-    ? `http://${localIP}:5173/play?room=${roomCode}`
+    ? `http://${localIP}${portSuffix}/play?room=${roomCode}`
     : '';
 
   // ---------------------------------------------------------------------------
@@ -313,7 +324,15 @@ export default function HostView() {
             Judge!
           </button>
 
-          {submissionCount < 2 && (
+          {judgingError && (
+            <div className="glass-card p-4 border-red-500/30 border text-center animate-fade-in-up">
+              <p className="text-red-400 font-semibold mb-1">Judging failed</p>
+              <p className="text-[#94a3b8] text-sm">{judgingError}</p>
+              <p className="text-[#94a3b8] text-xs mt-1">Hit JUDGE! to retry</p>
+            </div>
+          )}
+
+          {submissionCount < 2 && !judgingError && (
             <p className="text-[#94a3b8] text-sm">Need at least 2 submissions to start judging</p>
           )}
         </div>

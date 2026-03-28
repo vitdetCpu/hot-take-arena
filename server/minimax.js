@@ -152,9 +152,10 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
     throw new Error(`MiniMax API call failed: ${err.message}`);
   }
 
-  // Build lookups so we can attach playerName and original text from submissions
+  // Build lookups so we can attach playerName, text, and socketId from submissions
   const playerLookup = new Map(submissions.map((s) => [s.index, s.playerName]));
   const textLookup = new Map(submissions.map((s) => [s.index, s.text]));
+  const socketLookup = new Map(submissions.map((s) => [s.index, s.socketId]));
 
   let buffer = "";
   const allResults = [];
@@ -178,6 +179,7 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
         index: obj.index,
         playerName: playerLookup.get(obj.index) ?? `Player ${obj.index}`,
         text: textLookup.get(obj.index) ?? '',
+        socketId: socketLookup.get(obj.index) ?? null,
         roast: obj.roast,
         score: obj.score,
       };
@@ -198,6 +200,7 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
         index: obj.index,
         playerName: playerLookup.get(obj.index) ?? `Player ${obj.index}`,
         text: textLookup.get(obj.index) ?? '',
+        socketId: socketLookup.get(obj.index) ?? null,
         roast: obj.roast,
         score: obj.score,
       };

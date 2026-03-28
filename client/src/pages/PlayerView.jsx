@@ -22,6 +22,12 @@ export default function PlayerView() {
   const [hotTake, setHotTake] = useState('');
   const [submitError, setSubmitError] = useState('');
 
+  // Voice input
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
   // Results
   const [myResult, setMyResult] = useState(null);
   const [totalResults, setTotalResults] = useState(0);
@@ -30,11 +36,8 @@ export default function PlayerView() {
   // Computed: has room code from URL?
   const hasRoomFromUrl = Boolean(searchParams.get('room'));
 
-  // Ref to track the current player name for use inside socket listeners
-  const playerNameRef = useRef(playerName);
-  useEffect(() => {
-    playerNameRef.current = playerName;
-  }, [playerName]);
+  // Ref to track socket ID for matching roast results to this player
+  const socketIdRef = useRef(null);
 
   // ---------------------------------------------------------------------------
   // Socket.IO setup — single useEffect, all listeners use refs for state
@@ -43,18 +46,28 @@ export default function PlayerView() {
     const socket = io();
     socketRef.current = socket;
 
+    // Capture socket ID for reliable player identification (handles duplicate names)
+    socket.on('connect', () => {
+      socketIdRef.current = socket.id;
+    });
+
     socket.on('error:room-not-found', ({ message }) => {
       setJoinError(message || 'Room not found');
+      setPhase('joining');
     });
 
     socket.on('error:already-submitted', ({ message }) => {
       setSubmitError(message || 'Already submitted');
     });
 
-    socket.on('room:player-joined', ({ playerName: name }) => {
-      if (name === playerNameRef.current) {
-        setPhase((prev) => (prev === 'joining' ? 'waiting' : prev));
-      }
+    socket.on('error:invalid-submission', ({ message }) => {
+      setSubmitError(message || 'Invalid submission');
+      setPhase('submitting');
+    });
+
+    socket.on('room:player-joined', ({ playerName: name, playerCount }) => {
+      // Check if this is our own join confirmation (server echoes to room)
+      // We transition to waiting after emitting join — see handleJoin
     });
 
     socket.on('room:prompt', ({ prompt: p }) => {
@@ -66,7 +79,8 @@ export default function PlayerView() {
 
     socket.on('room:roast', (roast) => {
       setAllResults((prev) => [...prev, roast]);
-      if (roast.playerName === playerNameRef.current) {
+      // Match on socket ID (reliable) — handles duplicate player names
+      if (roast.socketId && roast.socketId === socketIdRef.current) {
         setMyResult(roast);
         setPhase('results');
       }
@@ -76,6 +90,15 @@ export default function PlayerView() {
       setTotalResults(total);
       // If we never got a personal result (didn't submit), still transition
       setPhase((prev) => (prev === 'submitted' ? 'results' : prev));
+    });
+
+    socket.on('room:host-disconnected', () => {
+      setPhase('host-disconnected');
+    });
+
+    socket.on('room:judging-error', () => {
+      // Go back to submitted/submitting state — host will retry
+      setPhase((prev) => (prev === 'results' ? 'submitted' : prev));
     });
 
     socket.on('room:reset', () => {
@@ -103,6 +126,7 @@ export default function PlayerView() {
     setJoinError('');
     setJoinedRoomCode(code);
     socketRef.current?.emit('player:join', { roomCode: code, playerName: name });
+    setPhase('waiting');
   }, [roomCode, playerName]);
 
   const handleSubmit = useCallback(() => {
@@ -114,6 +138,69 @@ export default function PlayerView() {
     });
     setPhase('submitted');
   }, [hotTake, joinedRoomCode]);
+
+  // ---------------------------------------------------------------------------
+  // Voice input (fal Whisper STT)
+  // ---------------------------------------------------------------------------
+  const handleMicToggle = useCallback(async () => {
+    if (isRecording) {
+      // Stop recording
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    // Start recording
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : 'audio/webm',
+      });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach((t) => t.stop());
+
+        const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+        if (blob.size === 0) return;
+
+        setIsTranscribing(true);
+        try {
+          const res = await fetch('/api/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': mediaRecorder.mimeType },
+            body: blob,
+          });
+          const data = await res.json();
+          if (data.text) {
+            setHotTake((prev) => {
+              const combined = prev ? `${prev} ${data.text}` : data.text;
+              return combined.slice(0, MAX_CHARS);
+            });
+          } else if (data.error) {
+            setSubmitError(`Voice: ${data.error}`);
+          }
+        } catch {
+          setSubmitError('Voice transcription failed');
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch {
+      setSubmitError('Microphone access denied');
+    }
+  }, [isRecording]);
 
   // ---------------------------------------------------------------------------
   // Character count color
@@ -133,7 +220,7 @@ export default function PlayerView() {
     ? allResults
         .slice()
         .sort((a, b) => b.score - a.score)
-        .findIndex((r) => r.playerName === myResult.playerName) + 1
+        .findIndex((r) => r.socketId === myResult.socketId) + 1
     : null;
 
   // ---------------------------------------------------------------------------
@@ -270,10 +357,10 @@ export default function PlayerView() {
             </h2>
           </div>
 
-          {/* Textarea */}
+          {/* Textarea + Mic */}
           <div className="relative">
             <textarea
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 pr-14
                          text-base text-[#e2e8f0] placeholder-[#94a3b8]/50 outline-none
                          focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/30
                          transition-colors resize-none"
@@ -282,7 +369,47 @@ export default function PlayerView() {
               placeholder="Drop your hottest take..."
               value={hotTake}
               onChange={(e) => setHotTake(e.target.value)}
+              disabled={isTranscribing}
             />
+
+            {/* Mic button */}
+            <button
+              type="button"
+              onClick={handleMicToggle}
+              disabled={isTranscribing}
+              className={`absolute top-3 right-3 w-10 h-10 rounded-full flex items-center justify-center
+                         transition-all duration-200 cursor-pointer
+                         ${isRecording
+                           ? 'bg-red-500/20 border-2 border-red-500 animate-pulse-glow'
+                           : isTranscribing
+                             ? 'bg-purple-500/20 border border-purple-500/40'
+                             : 'bg-white/5 border border-white/20 hover:border-purple-500/40 hover:bg-purple-500/10'
+                         }`}
+              aria-label={isRecording ? 'Stop recording' : 'Start voice input'}
+            >
+              {isTranscribing ? (
+                <div className="animate-spin-slow w-5 h-5 rounded-full border-2 border-transparent border-t-purple-500" />
+              ) : (
+                <svg className={`w-5 h-5 ${isRecording ? 'text-red-400' : 'text-[#94a3b8]'}`}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+                </svg>
+              )}
+            </button>
+
+            {/* Recording indicator */}
+            {isRecording && (
+              <div className="absolute -top-7 right-0 text-xs text-red-400 font-semibold animate-fade-in-up">
+                Listening...
+              </div>
+            )}
+            {isTranscribing && (
+              <div className="absolute -top-7 right-0 text-xs text-purple-400 font-semibold animate-fade-in-up">
+                Transcribing...
+              </div>
+            )}
+
             <div
               className="absolute bottom-3 right-3 text-xs font-mono font-bold"
               style={{ color: charColor }}
@@ -428,6 +555,21 @@ export default function PlayerView() {
           <p className="text-[#94a3b8] text-xs mt-2">
             Next round starts when the host is ready.
           </p>
+        </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* HOST DISCONNECTED                                                 */}
+      {/* ================================================================= */}
+      {phase === 'host-disconnected' && (
+        <div className="animate-fade-in-up flex flex-col items-center gap-4 text-center">
+          <div className="text-4xl" aria-hidden="true">
+            <svg className="w-12 h-12 text-red-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-red-400">Host Disconnected</h2>
+          <p className="text-[#94a3b8]">The host has left the game. Thanks for playing!</p>
         </div>
       )}
     </div>

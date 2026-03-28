@@ -6,6 +6,7 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { judgeSubmissions } from "./minimax.js";
+import { transcribeAudio } from "./transcribe.js";
 
 // ---------------------------------------------------------------------------
 // Express + HTTP + Socket.IO
@@ -20,6 +21,25 @@ const io = new Server(httpServer, {
 // Serve built Vite output in production
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "..", "dist")));
+
+// ---------------------------------------------------------------------------
+// REST API: Speech-to-text via fal Whisper
+// ---------------------------------------------------------------------------
+
+// Accept raw audio body (up to 10MB)
+app.post("/api/transcribe", express.raw({ type: "audio/*", limit: "10mb" }), async (req, res) => {
+  try {
+    if (!req.body || req.body.length === 0) {
+      return res.status(400).json({ error: "No audio data received" });
+    }
+
+    const text = await transcribeAudio(req.body, req.headers["content-type"] || "audio/webm");
+    res.json({ text });
+  } catch (err) {
+    console.error("[transcribe] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // SPA fallback — serve index.html for any non-API route
 app.get("*", (_req, res) => {
@@ -121,7 +141,7 @@ io.on("connection", (socket) => {
 
     const localIP = getLocalIP();
     console.log(`[room] ${roomCode} created by ${socket.id}`);
-    socket.emit("room:created", { roomCode, localIP });
+    socket.emit("room:created", { roomCode, localIP, port: PORT });
   });
 
   socket.on("host:push-prompt", ({ roomCode, prompt }) => {
@@ -141,15 +161,16 @@ io.on("connection", (socket) => {
     room.phase = "judging";
     console.log(`[room ${roomCode}] phase → judging`);
 
-    // Build submissions array
+    // Build submissions array with socketId for player identification
     const submissions = [];
     let idx = 1;
-    for (const [, player] of room.players) {
+    for (const [socketId, player] of room.players) {
       if (player.submission) {
         submissions.push({
           index: idx,
           playerName: player.name,
           text: player.submission,
+          socketId,
         });
         idx++;
       }
@@ -180,10 +201,11 @@ io.on("connection", (socket) => {
       });
     } catch (err) {
       console.error(`[room ${roomCode}] judging error:`, err.message);
-      // Still transition to results so the game isn't stuck
-      room.phase = "results";
-      io.to(roomCode).emit("room:judging-complete", {
-        totalResults: room.results.length,
+      // Transition back to submitting so the host can retry
+      room.phase = "submitting";
+      room.results = [];
+      io.to(roomCode).emit("room:judging-error", {
+        message: err.message || "AI judging failed",
       });
     }
   });
@@ -220,16 +242,38 @@ io.on("connection", (socket) => {
       return;
     }
 
-    room.players.set(socket.id, { name: playerName, submission: null });
+    // Server-side name validation
+    const name =
+      typeof playerName === "string" ? playerName.trim().slice(0, 30) : "Anon";
+    const safeName = name || "Anon";
+
+    // Check for reconnection: if a player with the same name exists AND their
+    // socket is disconnected, restore their state (submission) so they don't
+    // lose progress. Only evict if the old socket is truly gone.
+    let existingSubmission = null;
+    for (const [existingId, player] of room.players) {
+      if (player.name === safeName) {
+        const existingSocket = io.sockets.sockets.get(existingId);
+        if (!existingSocket || !existingSocket.connected) {
+          existingSubmission = player.submission;
+          room.players.delete(existingId);
+          socketRoomMap.delete(existingId);
+        }
+        break;
+      }
+    }
+
+    room.players.set(socket.id, {
+      name: safeName,
+      submission: existingSubmission,
+    });
     socket.join(code);
     socketRoomMap.set(socket.id, code);
 
     const playerCount = room.players.size;
-    console.log(
-      `[room ${code}] ${playerName} joined (${playerCount} players)`
-    );
+    console.log(`[room ${code}] ${name} joined (${playerCount} players)`);
     io.to(code).emit("room:player-joined", {
-      playerName,
+      playerName: name,
       playerCount,
     });
 
@@ -260,7 +304,16 @@ io.on("connection", (socket) => {
       return;
     }
 
-    player.submission = text;
+    // Server-side validation (client enforces 280, but validate here too)
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (!trimmed || trimmed.length > 500) {
+      socket.emit("error:invalid-submission", {
+        message: "Submission must be 1-500 characters",
+      });
+      return;
+    }
+
+    player.submission = trimmed;
 
     // Count how many have submitted
     let submissionCount = 0;
@@ -306,10 +359,17 @@ io.on("connection", (socket) => {
       });
     }
 
-    // If the host disconnected and no players remain, clean up the room
-    if (socket.id === room.hostSocketId && playerCount === 0) {
-      rooms.delete(roomCode);
-      console.log(`[room ${roomCode}] deleted (host left, no players)`);
+    // If the host disconnected, notify remaining players
+    if (socket.id === room.hostSocketId) {
+      if (playerCount === 0) {
+        rooms.delete(roomCode);
+        console.log(`[room ${roomCode}] deleted (host left, no players)`);
+      } else {
+        io.to(roomCode).emit("room:host-disconnected");
+        console.log(
+          `[room ${roomCode}] host disconnected, ${playerCount} players notified`
+        );
+      }
     }
   });
 });

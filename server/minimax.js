@@ -227,7 +227,7 @@ async function runWithConcurrency(taskFns, limit) {
 // ---------------------------------------------------------------------------
 
 const BATCH_SIZE = 25;
-const MAX_CONCURRENT_BATCHES = 4;
+const MAX_CONCURRENT_BATCHES = 6;
 
 /**
  * Splits submissions into batches of ~25, fires up to 4 API calls at once,

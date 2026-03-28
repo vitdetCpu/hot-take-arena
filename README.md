@@ -16,7 +16,7 @@ Real-time multiplayer opinion battle game. One person hosts on a big screen, eve
 - **Frontend:** React 19, Vite, Tailwind CSS v4
 - **Backend:** Express, Socket.IO
 - **AI Judge:** MiniMax M2 (streaming, parallel batched)
-- **Voice Input:** fal.ai Whisper
+- **Voice Input:** Web Speech API (browser-native, free)
 
 ## Setup
 
@@ -25,16 +25,13 @@ npm install
 cp .env.example .env
 ```
 
-Add your API keys to `.env`:
+Add your API key to `.env`:
 
 ```
 MINIMAX_API_KEY=your-key-here
-FAL_KEY=your-key-here
 ```
 
-Get your keys from:
-- MiniMax: https://www.minimax.io
-- fal.ai: https://fal.ai (for voice input, optional)
+Get your key from: https://www.minimax.io
 
 ## Run
 
@@ -75,7 +72,6 @@ client/          React frontend (Vite)
 server/
   index.js       Express + Socket.IO server, room management
   minimax.js     AI judge with parallel batched streaming
-  transcribe.js  fal.ai Whisper speech-to-text
 ```
 
 ### How AI Judging Works
@@ -86,7 +82,6 @@ Submissions are split into batches of 25 and sent to MiniMax M2 in parallel (up 
 
 - Up to 150 players per room
 - 100 submissions judged in ~36 seconds (first roast appears in ~12s)
-- Per-IP rate limiting on voice transcription
 - Host reconnection with 30s grace period
 - Player reconnection with 60s grace period
 

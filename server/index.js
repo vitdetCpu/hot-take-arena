@@ -7,7 +7,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { judgeSubmissions } from "./minimax.js";
-import { transcribeAudio } from "./transcribe.js";
 
 // ---------------------------------------------------------------------------
 // Express + HTTP + Socket.IO
@@ -22,46 +21,6 @@ const io = new Server(httpServer, {
 // Serve built Vite output in production
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "..", "dist")));
-
-// ---------------------------------------------------------------------------
-// REST API: Speech-to-text via fal Whisper
-// ---------------------------------------------------------------------------
-
-// Simple per-IP rate limiter for transcription endpoint
-const transcribeRateMap = new Map();
-const RATE_LIMIT_WINDOW = 60_000;
-const RATE_LIMIT_MAX = 5;
-
-function checkTranscribeRate(ip) {
-  const now = Date.now();
-  const entry = transcribeRateMap.get(ip) || { count: 0, reset: now + RATE_LIMIT_WINDOW };
-  if (now > entry.reset) {
-    entry.count = 0;
-    entry.reset = now + RATE_LIMIT_WINDOW;
-  }
-  entry.count++;
-  transcribeRateMap.set(ip, entry);
-  return entry.count <= RATE_LIMIT_MAX;
-}
-
-// Accept raw audio body (up to 10MB)
-app.post("/api/transcribe", express.raw({ type: "audio/*", limit: "10mb" }), async (req, res) => {
-  try {
-    if (!checkTranscribeRate(req.ip)) {
-      return res.status(429).json({ error: "Too many requests. Try again in a minute." });
-    }
-
-    if (!req.body || req.body.length === 0) {
-      return res.status(400).json({ error: "No audio data received" });
-    }
-
-    const text = await transcribeAudio(req.body, req.headers["content-type"] || "audio/webm");
-    res.json({ text });
-  } catch (err) {
-    console.error("[transcribe] error:", err.message);
-    res.status(500).json({ error: "Transcription failed. Please try again." });
-  }
-});
 
 // SPA fallback — serve index.html for any non-API route
 app.get("*", (_req, res) => {
@@ -130,14 +89,6 @@ const socketRoomMap = new Map();
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS_PER_ROOM = 150;
-
-// Clean up stale rate-limit entries every 60s
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of transcribeRateMap) {
-    if (now > entry.reset) transcribeRateMap.delete(ip);
-  }
-}, 60_000);
 
 // ---------------------------------------------------------------------------
 // Utility: detect local network IP

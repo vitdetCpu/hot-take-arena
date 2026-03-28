@@ -89,7 +89,7 @@ export default function PlayerView() {
     socket.on('room:judging-complete', ({ totalResults: total }) => {
       setTotalResults(total);
       // If we never got a personal result (didn't submit), still transition
-      setPhase((prev) => (prev === 'submitted' ? 'results' : prev));
+      setPhase((prev) => (prev === 'submitted' || prev === 'submitting' ? 'results' : prev));
     });
 
     socket.on('room:host-disconnected', () => {

@@ -343,14 +343,18 @@ io.on("connection", (socket) => {
 
     player.submission = trimmed;
 
-    // Count how many have submitted
+    // Count how many connected players have submitted
     let submissionCount = 0;
+    let connectedCount = 0;
     for (const [, p] of room.players) {
-      if (p.submission) submissionCount++;
+      if (p.connected !== false) {
+        connectedCount++;
+        if (p.submission) submissionCount++;
+      }
     }
 
     console.log(
-      `[room ${roomCode}] ${player.name} submitted (${submissionCount}/${room.players.size})`
+      `[room ${roomCode}] ${player.name} submitted (${submissionCount}/${connectedCount})`
     );
     io.to(roomCode).emit("room:submission", {
       playerName: player.name,

@@ -62,7 +62,6 @@ function extractJsonObjects(buffer) {
   let i = 0;
 
   while (i < buffer.length) {
-    // Find the next opening brace
     const start = buffer.indexOf("{", i);
     if (start === -1) break;
 
@@ -98,10 +97,7 @@ function extractJsonObjects(buffer) {
       }
     }
 
-    if (end === -1) {
-      // Incomplete object — keep remainder starting from this brace
-      break;
-    }
+    if (end === -1) break;
 
     const candidate = buffer.slice(start, end + 1);
     try {
@@ -113,10 +109,28 @@ function extractJsonObjects(buffer) {
     i = end + 1;
   }
 
-  // Remainder is everything from the last unmatched '{' onward (or empty)
   const remainder = i < buffer.length ? buffer.slice(i) : "";
-
   return { parsed, remainder };
+}
+
+// ---------------------------------------------------------------------------
+// Process a parsed object into a roast and emit it
+// ---------------------------------------------------------------------------
+
+function processObj(obj, lookups, results, onRoast) {
+  if (obj.index == null || obj.roast == null || obj.score == null) return;
+
+  const roast = {
+    index: obj.index,
+    playerName: lookups.player.get(obj.index) ?? `Player ${obj.index}`,
+    text: lookups.text.get(obj.index) ?? "",
+    socketId: lookups.socket.get(obj.index) ?? null,
+    roast: obj.roast,
+    score: obj.score,
+  };
+
+  results.push(roast);
+  onRoast(roast);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,50 +138,52 @@ function extractJsonObjects(buffer) {
 // ---------------------------------------------------------------------------
 
 async function streamBatch(client, prompt, batchSubmissions, onRoast) {
-  // Build lookups for this batch
-  const playerLookup = new Map(batchSubmissions.map((s) => [s.index, s.playerName]));
-  const textLookup = new Map(batchSubmissions.map((s) => [s.index, s.text]));
-  const socketLookup = new Map(batchSubmissions.map((s) => [s.index, s.socketId]));
+  const first = batchSubmissions[0]?.index;
+  const last = batchSubmissions[batchSubmissions.length - 1]?.index;
+  const label = `batch[${first}-${last}]`;
 
-  const stream = await client.chat.completions.create({
-    model: "MiniMax-M2",
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserPrompt(prompt, batchSubmissions) },
-    ],
-    stream: true,
-  });
+  const lookups = {
+    player: new Map(batchSubmissions.map((s) => [s.index, s.playerName])),
+    text: new Map(batchSubmissions.map((s) => [s.index, s.text])),
+    socket: new Map(batchSubmissions.map((s) => [s.index, s.socketId])),
+  };
+
+  let stream;
+  try {
+    stream = await client.chat.completions.create({
+      model: "MiniMax-M2",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: buildUserPrompt(prompt, batchSubmissions) },
+      ],
+      stream: true,
+    });
+  } catch (err) {
+    throw new Error(`MiniMax API call failed for ${label}: ${err.message}`);
+  }
 
   let buffer = "";
   const results = [];
 
-  for await (const chunk of stream) {
-    const delta = chunk.choices?.[0]?.delta?.content;
-    if (!delta) continue;
+  try {
+    for await (const chunk of stream) {
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (!delta) continue;
 
-    buffer += delta;
+      buffer += delta;
+      buffer = buffer.replace(/^```(?:json)?\s*/, "");
 
-    // Strip leading markdown fences if present
-    buffer = buffer.replace(/^```(?:json)?\s*/, "");
+      const { parsed, remainder } = extractJsonObjects(buffer);
+      buffer = remainder;
 
-    const { parsed, remainder } = extractJsonObjects(buffer);
-    buffer = remainder;
-
-    for (const obj of parsed) {
-      if (obj.index == null || obj.roast == null || obj.score == null) continue;
-
-      const roast = {
-        index: obj.index,
-        playerName: playerLookup.get(obj.index) ?? `Player ${obj.index}`,
-        text: textLookup.get(obj.index) ?? "",
-        socketId: socketLookup.get(obj.index) ?? null,
-        roast: obj.roast,
-        score: obj.score,
-      };
-
-      results.push(roast);
-      onRoast(roast);
+      for (const obj of parsed) {
+        processObj(obj, lookups, results, onRoast);
+      }
     }
+  } catch (err) {
+    console.error(`[judge] ${label} stream error: ${err.message}`);
+    // Return whatever results we got before the error
+    return results;
   }
 
   // Final sweep: buffer might have a trailing ``` or whitespace
@@ -175,19 +191,7 @@ async function streamBatch(client, prompt, batchSubmissions, onRoast) {
   if (buffer.length > 0) {
     const { parsed } = extractJsonObjects(buffer);
     for (const obj of parsed) {
-      if (obj.index == null || obj.roast == null || obj.score == null) continue;
-
-      const roast = {
-        index: obj.index,
-        playerName: playerLookup.get(obj.index) ?? `Player ${obj.index}`,
-        text: textLookup.get(obj.index) ?? "",
-        socketId: socketLookup.get(obj.index) ?? null,
-        roast: obj.roast,
-        score: obj.score,
-      };
-
-      results.push(roast);
-      onRoast(roast);
+      processObj(obj, lookups, results, onRoast);
     }
   }
 
@@ -195,14 +199,42 @@ async function streamBatch(client, prompt, batchSubmissions, onRoast) {
 }
 
 // ---------------------------------------------------------------------------
+// Concurrency limiter — runs up to `limit` tasks at once
+// ---------------------------------------------------------------------------
+
+async function runWithConcurrency(taskFns, limit) {
+  const results = [];
+  const executing = new Set();
+
+  for (const fn of taskFns) {
+    const p = fn().then(
+      (value) => { executing.delete(p); return { status: "fulfilled", value }; },
+      (reason) => { executing.delete(p); return { status: "rejected", reason }; }
+    );
+    executing.add(p);
+    results.push(p);
+
+    if (executing.size >= limit) {
+      await Promise.race(executing);
+    }
+  }
+
+  return Promise.all(results);
+}
+
+// ---------------------------------------------------------------------------
 // Main export: judgeSubmissions (parallel batched)
 // ---------------------------------------------------------------------------
 
 const BATCH_SIZE = 25;
+const MAX_CONCURRENT_BATCHES = 4;
 
 /**
- * Splits submissions into batches of ~25, fires all API calls in parallel,
+ * Splits submissions into batches of ~25, fires up to 4 API calls at once,
  * and streams roasts back as they arrive from any batch.
+ *
+ * NOTE: onRoast may be called from multiple batches in non-deterministic
+ * order. Callers should not assume results arrive in score order.
  *
  * @param {string}   prompt       - The game prompt
  * @param {Array}    submissions  - [{ index, playerName, text, socketId }, ...]
@@ -216,6 +248,14 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
 
   const client = getClient();
 
+  // Dedupe guard: prevent the same index from being emitted twice
+  const emittedIndices = new Set();
+  const guardedOnRoast = (roast) => {
+    if (emittedIndices.has(roast.index)) return;
+    emittedIndices.add(roast.index);
+    onRoast(roast);
+  };
+
   // Split into batches
   const batches = [];
   for (let i = 0; i < submissions.length; i += BATCH_SIZE) {
@@ -223,15 +263,38 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
   }
 
   console.log(
-    `[judge] ${submissions.length} submissions → ${batches.length} parallel batch(es) of ~${BATCH_SIZE}`
+    `[judge] ${submissions.length} submissions → ${batches.length} batch(es), max ${MAX_CONCURRENT_BATCHES} concurrent`
   );
 
-  // Fire all batches in parallel — results stream back as they arrive
-  const batchPromises = batches.map((batch) =>
-    streamBatch(client, prompt, batch, onRoast)
+  // Fire batches with concurrency limit — results stream as they arrive
+  const batchTasks = batches.map(
+    (batch) => () => streamBatch(client, prompt, batch, guardedOnRoast)
   );
 
-  // Wait for all batches to complete, collect results
-  const batchResults = await Promise.all(batchPromises);
-  return batchResults.flat();
+  const settled = await runWithConcurrency(batchTasks, MAX_CONCURRENT_BATCHES);
+
+  // Collect results, handle partial failures
+  const allResults = [];
+  let failures = 0;
+
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
+      allResults.push(...result.value);
+    } else {
+      failures++;
+      console.error(`[judge] batch failed: ${result.reason?.message}`);
+    }
+  }
+
+  if (allResults.length === 0 && failures > 0) {
+    throw new Error(`All ${failures} batch(es) failed`);
+  }
+
+  if (failures > 0) {
+    console.warn(
+      `[judge] ${failures}/${batches.length} batch(es) failed, ${allResults.length} results delivered`
+    );
+  }
+
+  return allResults;
 }

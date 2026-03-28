@@ -220,22 +220,27 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // Abort guard: prevents ghost results from arriving after timeout/error
+    let aborted = false;
+    const safeOnRoast = (roast) => {
+      if (aborted) return;
+      room.results.push(roast);
+      io.to(roomCode).emit("room:roast", roast);
+    };
+
+    const timeoutId = setTimeout(() => { aborted = true; }, 90_000);
+
     try {
       // Race against a 90s timeout to prevent indefinite hangs
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("AI judging timed out after 90s")), 90_000)
       );
       const results = await Promise.race([
-        judgeSubmissions(
-          room.prompt,
-          submissions,
-          (roast) => {
-            room.results.push(roast);
-            io.to(roomCode).emit("room:roast", roast);
-          }
-        ),
+        judgeSubmissions(room.prompt, submissions, safeOnRoast),
         timeoutPromise,
       ]);
+
+      clearTimeout(timeoutId);
 
       room.phase = "results";
       console.log(
@@ -245,13 +250,27 @@ io.on("connection", (socket) => {
         totalResults: results.length,
       });
     } catch (err) {
+      clearTimeout(timeoutId);
+      aborted = true;
+
       console.error(`[room ${roomCode}] judging error:`, err.message);
-      // Transition back to submitting so the host can retry
-      room.phase = "submitting";
-      room.results = [];
-      io.to(roomCode).emit("room:judging-error", {
-        message: "AI judging failed. Please retry.",
-      });
+
+      // If we got partial results, still show them
+      if (room.results.length > 0) {
+        room.phase = "results";
+        console.log(
+          `[room ${roomCode}] partial results: ${room.results.length} roasts delivered before error`
+        );
+        io.to(roomCode).emit("room:judging-complete", {
+          totalResults: room.results.length,
+        });
+      } else {
+        // No results at all — transition back to submitting so host can retry
+        room.phase = "submitting";
+        io.to(roomCode).emit("room:judging-error", {
+          message: "AI judging failed. Please retry.",
+        });
+      }
     }
   });
 

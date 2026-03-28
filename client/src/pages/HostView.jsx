@@ -76,6 +76,14 @@ export default function HostView() {
       setRecentSubmissions((prev) => [...prev.slice(-4), { id: tickerId, name: playerName }]);
     });
 
+    socket.on('room:prompt', () => {
+      setPhase('submitting');
+    });
+
+    socket.on('room:judging-started', () => {
+      setPhase('judging');
+    });
+
     socket.on('room:roast', (roast) => {
       setPhase('results');
       setResults((prev) => {
@@ -113,9 +121,10 @@ export default function HostView() {
       }
     });
 
-    socket.on('host:reconnected', ({ roomCode: code, phase: serverPhase, prompt, playerCount: count, submissionCount: subCount, results: existingResults }) => {
+    socket.on('host:reconnected', ({ roomCode: code, phase: serverPhase, prompt, playerCount: count, submissionCount: subCount, results: existingResults, localIP: ip }) => {
       setRoomCode(code);
       setPlayerCount(count);
+      if (ip) setLocalIP(ip);
       if (prompt) setPromptText(prompt);
       if (subCount !== undefined) setSubmissionCount(subCount);
       if (existingResults?.length) {
@@ -164,7 +173,7 @@ export default function HostView() {
       roomCode,
       prompt: promptText.trim(),
     });
-    setPhase('submitting');
+    // Phase transitions driven by server via room:prompt event
     setSubmissionCount(0);
     setRecentSubmissions([]);
   }, [promptText, roomCode]);
@@ -172,7 +181,7 @@ export default function HostView() {
   const handleStartJudging = useCallback(() => {
     if (!roomCode) return;
     socketRef.current?.emit('host:start-judging', { roomCode });
-    setPhase('judging');
+    // Phase transition driven by server via room:roast event
     setResults([]);
     setJudgingComplete(false);
     setWinnerIndex(-1);

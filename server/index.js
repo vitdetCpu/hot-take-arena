@@ -162,6 +162,7 @@ io.on("connection", (socket) => {
       playerCount,
       submissionCount,
       results: room.results,
+      localIP: getLocalIP(),
     });
     io.to(code).emit("room:host-reconnected", { phase: room.phase });
   });
@@ -188,6 +189,7 @@ io.on("connection", (socket) => {
 
     room.phase = "judging";
     room.results = []; // Clear stale results from any previous attempt
+    io.to(roomCode).emit("room:judging-started");
     console.log(`[room ${roomCode}] phase → judging`);
 
     // Build submissions array with socketId for player identification
@@ -457,10 +459,15 @@ io.on("connection", (socket) => {
         );
         const oldHostId = socket.id;
         setTimeout(() => {
-          // If host hasn't reconnected (hostSocketId unchanged), notify players
+          // If host hasn't reconnected (hostSocketId unchanged), notify and clean up
           if (room.hostSocketId === oldHostId) {
             io.to(roomCode).emit("room:host-disconnected");
-            console.log(`[room ${roomCode}] host did not reconnect, players notified`);
+            // Clean up room and all player entries
+            for (const [sid] of room.players) {
+              socketRoomMap.delete(sid);
+            }
+            rooms.delete(roomCode);
+            console.log(`[room ${roomCode}] host did not reconnect, room deleted`);
           }
         }, 30_000);
       }

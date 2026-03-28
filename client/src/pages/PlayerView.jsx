@@ -200,8 +200,12 @@ export default function PlayerView() {
       setIsRecording(false);
     };
 
-    setIsRecording(true);
-    recognition.start();
+    try {
+      recognition.start();
+      setIsRecording(true);
+    } catch {
+      setSubmitError('Microphone access denied or unavailable');
+    }
   }, [isRecording]);
 
   // ---------------------------------------------------------------------------

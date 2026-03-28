@@ -42,7 +42,7 @@ const submissions = Array.from({ length: PLAYER_COUNT }, (_, i) => ({
 
 console.log(`\n🔥 Hot Take Arena Load Test`);
 console.log(`   Simulating ${PLAYER_COUNT} submissions\n`);
-console.log(`   Batches: ${Math.ceil(PLAYER_COUNT / 25)} (25 per batch, max 4 concurrent)\n`);
+console.log(`   Batches: ${Math.ceil(PLAYER_COUNT / 25)} (25 per batch, max 6 concurrent)\n`);
 
 const startTime = performance.now();
 let firstRoastTime = null;

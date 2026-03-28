@@ -29,7 +29,8 @@ export default function LandingView() {
           className="w-full py-4 rounded-xl text-lg font-bold text-[#e2e8f0]
                      uppercase tracking-wider cursor-pointer
                      bg-white/5 border border-white/10
-                     hover:border-purple-500/30 hover:bg-purple-500/10 transition-colors"
+                     hover:border-purple-500/30 hover:bg-purple-500/10 transition-colors
+                     active:scale-[0.98]"
           aria-label="Join an existing game as a player"
         >
           Join a Game

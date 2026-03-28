@@ -288,9 +288,10 @@ export default function HostView() {
                 <button
                   key={suggestion}
                   onClick={() => setPromptText(suggestion)}
-                  className="px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10
+                  className="px-3 py-3 text-sm rounded-lg bg-white/5 border border-white/10
                              text-[#94a3b8] hover:text-[#e2e8f0] hover:border-purple-500/30
-                             hover:bg-purple-500/10 transition-colors cursor-pointer"
+                             hover:bg-purple-500/10 transition-colors cursor-pointer
+                             active:scale-[0.98]"
                 >
                   {suggestion}
                 </button>

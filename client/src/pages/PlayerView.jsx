@@ -170,7 +170,7 @@ export default function PlayerView() {
       return;
     }
 
-    if (!navigator.mediaDevices?.getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setSubmitError('Voice input not supported on this browser');
       return;
     }
@@ -403,7 +403,7 @@ export default function PlayerView() {
               type="button"
               onClick={handleMicToggle}
               disabled={isTranscribing}
-              className={`absolute top-3 right-3 w-10 h-10 rounded-full flex items-center justify-center
+              className={`absolute top-2 right-2 w-11 h-11 rounded-full flex items-center justify-center
                          transition-all duration-200 cursor-pointer
                          ${isRecording
                            ? 'bg-red-500/20 border-2 border-red-500 animate-pulse-glow'

@@ -51,10 +51,19 @@ export async function transcribeAudio(audioBuffer, mimeType) {
 
   if (typeof response === "string") return response.trim();
 
-  const text = response.results
-    ?.map((r) => r.alternatives?.[0]?.content)
-    .filter(Boolean)
-    .join(" ");
+  // Build text with punctuation-aware joining (no spaces before commas/periods)
+  const parts = [];
+  for (const r of response.results ?? []) {
+    const content = r.alternatives?.[0]?.content;
+    if (!content) continue;
+    if (r.type === "punctuation") {
+      if (parts.length > 0) {
+        parts[parts.length - 1] += content;
+      }
+    } else {
+      parts.push(content);
+    }
+  }
 
-  return text?.trim() || "";
+  return parts.join(" ").trim();
 }

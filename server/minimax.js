@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
 // ---------------------------------------------------------------------------
-// MiniMax Streaming AI Judge
+// MiniMax Streaming AI Judge — Parallel Batched
 // ---------------------------------------------------------------------------
 
 // Lazy-initialised so the server can start even without a valid API key.
@@ -99,7 +99,7 @@ function extractJsonObjects(buffer) {
     }
 
     if (end === -1) {
-      // Incomplete object \u2014 keep remainder starting from this brace
+      // Incomplete object — keep remainder starting from this brace
       break;
     }
 
@@ -108,7 +108,7 @@ function extractJsonObjects(buffer) {
       const obj = JSON.parse(candidate);
       parsed.push(obj);
     } catch {
-      // Malformed object \u2014 skip it
+      // Malformed object — skip it
     }
     i = end + 1;
   }
@@ -120,52 +120,26 @@ function extractJsonObjects(buffer) {
 }
 
 // ---------------------------------------------------------------------------
-// Main export: judgeSubmissions
+// Stream a single batch and call onRoast for each result
 // ---------------------------------------------------------------------------
 
-/**
- * Streams roasts from MiniMax and calls `onRoast` for each one as it arrives.
- *
- * @param {string}   prompt       - The game prompt
- * @param {Array}    submissions  - [{ index, playerName, text }, ...]
- * @param {Function} onRoast      - Called with { index, playerName, roast, score }
- * @returns {Promise<Array>}      - Resolves with all parsed roast objects
- */
-const MAX_SUBMISSIONS = 50;
+async function streamBatch(client, prompt, batchSubmissions, onRoast) {
+  // Build lookups for this batch
+  const playerLookup = new Map(batchSubmissions.map((s) => [s.index, s.playerName]));
+  const textLookup = new Map(batchSubmissions.map((s) => [s.index, s.text]));
+  const socketLookup = new Map(batchSubmissions.map((s) => [s.index, s.socketId]));
 
-export async function judgeSubmissions(prompt, submissions, onRoast) {
-  if (!submissions || submissions.length === 0) {
-    return [];
-  }
-
-  // Cap submissions to avoid exceeding AI context window
-  const capped = submissions.length > MAX_SUBMISSIONS
-    ? submissions.slice(0, MAX_SUBMISSIONS)
-    : submissions;
-
-  const client = getClient();
-
-  let stream;
-  try {
-    stream = await client.chat.completions.create({
-      model: "MiniMax-M2",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildUserPrompt(prompt, capped) },
-      ],
-      stream: true,
-    });
-  } catch (err) {
-    throw new Error(`MiniMax API call failed: ${err.message}`);
-  }
-
-  // Build lookups so we can attach playerName, text, and socketId from submissions
-  const playerLookup = new Map(capped.map((s) => [s.index, s.playerName]));
-  const textLookup = new Map(capped.map((s) => [s.index, s.text]));
-  const socketLookup = new Map(capped.map((s) => [s.index, s.socketId]));
+  const stream = await client.chat.completions.create({
+    model: "MiniMax-M2",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: buildUserPrompt(prompt, batchSubmissions) },
+    ],
+    stream: true,
+  });
 
   let buffer = "";
-  const allResults = [];
+  const results = [];
 
   for await (const chunk of stream) {
     const delta = chunk.choices?.[0]?.delta?.content;
@@ -185,13 +159,13 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
       const roast = {
         index: obj.index,
         playerName: playerLookup.get(obj.index) ?? `Player ${obj.index}`,
-        text: textLookup.get(obj.index) ?? '',
+        text: textLookup.get(obj.index) ?? "",
         socketId: socketLookup.get(obj.index) ?? null,
         roast: obj.roast,
         score: obj.score,
       };
 
-      allResults.push(roast);
+      results.push(roast);
       onRoast(roast);
     }
   }
@@ -206,16 +180,58 @@ export async function judgeSubmissions(prompt, submissions, onRoast) {
       const roast = {
         index: obj.index,
         playerName: playerLookup.get(obj.index) ?? `Player ${obj.index}`,
-        text: textLookup.get(obj.index) ?? '',
+        text: textLookup.get(obj.index) ?? "",
         socketId: socketLookup.get(obj.index) ?? null,
         roast: obj.roast,
         score: obj.score,
       };
 
-      allResults.push(roast);
+      results.push(roast);
       onRoast(roast);
     }
   }
 
-  return allResults;
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Main export: judgeSubmissions (parallel batched)
+// ---------------------------------------------------------------------------
+
+const BATCH_SIZE = 25;
+
+/**
+ * Splits submissions into batches of ~25, fires all API calls in parallel,
+ * and streams roasts back as they arrive from any batch.
+ *
+ * @param {string}   prompt       - The game prompt
+ * @param {Array}    submissions  - [{ index, playerName, text, socketId }, ...]
+ * @param {Function} onRoast      - Called with { index, playerName, roast, score }
+ * @returns {Promise<Array>}      - Resolves with all parsed roast objects
+ */
+export async function judgeSubmissions(prompt, submissions, onRoast) {
+  if (!submissions || submissions.length === 0) {
+    return [];
+  }
+
+  const client = getClient();
+
+  // Split into batches
+  const batches = [];
+  for (let i = 0; i < submissions.length; i += BATCH_SIZE) {
+    batches.push(submissions.slice(i, i + BATCH_SIZE));
+  }
+
+  console.log(
+    `[judge] ${submissions.length} submissions → ${batches.length} parallel batch(es) of ~${BATCH_SIZE}`
+  );
+
+  // Fire all batches in parallel — results stream back as they arrive
+  const batchPromises = batches.map((batch) =>
+    streamBatch(client, prompt, batch, onRoast)
+  );
+
+  // Wait for all batches to complete, collect results
+  const batchResults = await Promise.all(batchPromises);
+  return batchResults.flat();
 }

@@ -16,7 +16,6 @@ Real-time multiplayer opinion battle game. One person hosts on a big screen, eve
 - **Frontend:** React 19, Vite, Tailwind CSS v4
 - **Backend:** Express, Socket.IO
 - **AI Judge:** MiniMax M2 (streaming, parallel batched)
-- **Voice Input:** Speechmatics (enhanced accuracy, batch API)
 
 ## Setup
 
@@ -34,7 +33,6 @@ SPEECHMATICS_API_KEY=your-key-here
 
 Get your keys from:
 - MiniMax: https://www.minimax.io
-- Speechmatics: https://portal.speechmatics.com (8 free hours/month)
 
 ## Run
 

@@ -196,11 +196,11 @@ export default function HostView() {
   // ---------------------------------------------------------------------------
   // Build the join URL for the QR code
   // ---------------------------------------------------------------------------
-  // Use the host's current port — in dev that's 5173 (Vite), in production
-  // that's 3001 (Express). Players need the same port to reach the frontend.
-  const portSuffix = window.location.port ? `:${window.location.port}` : '';
-  const joinUrl = localIP && roomCode
-    ? `http://${localIP}${portSuffix}/play?room=${roomCode}`
+  // In production (Railway etc.) use the public hostname; locally use LAN IP.
+  const joinUrl = roomCode
+    ? window.location.hostname === 'localhost' || window.location.hostname.match(/^\d/)
+      ? `http://${localIP || 'localhost'}${window.location.port ? `:${window.location.port}` : ''}/play?room=${roomCode}`
+      : `${window.location.origin}/play?room=${roomCode}`
     : '';
 
   // ---------------------------------------------------------------------------

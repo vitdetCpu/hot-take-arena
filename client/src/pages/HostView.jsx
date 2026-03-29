@@ -337,16 +337,16 @@ export default function HostView() {
             <span className="text-xl text-[#94a3b8]">{playerCount} players</span>
           </div>
 
-          {/* Submission ticker */}
-          <div className="h-10 relative overflow-hidden w-full max-w-md">
-            {recentSubmissions.slice(-3).map((item) => (
+          {/* Submission ticker — show only the latest */}
+          <div className="h-10 w-full max-w-md flex items-center justify-center">
+            {recentSubmissions.length > 0 && (
               <div
-                key={item.id}
-                className="animate-ticker text-center text-lg text-[#a855f7] font-semibold absolute inset-x-0"
+                key={recentSubmissions[recentSubmissions.length - 1].id}
+                className="animate-fade-in-up text-center text-lg text-[#a855f7] font-semibold"
               >
-                {item.name} submitted!
+                {recentSubmissions[recentSubmissions.length - 1].name} submitted!
               </div>
-            ))}
+            )}
           </div>
 
           {/* Judge button */}

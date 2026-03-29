@@ -7,7 +7,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { judgeSubmissions } from "./minimax.js";
-import { transcribeAudio } from "./transcribe.js";
 
 // ---------------------------------------------------------------------------
 // Express + HTTP + Socket.IO
@@ -22,24 +21,6 @@ const io = new Server(httpServer, {
 // Serve built Vite output in production
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "..", "dist")));
-
-// ---------------------------------------------------------------------------
-// REST API: Speech-to-text via Speechmatics
-// ---------------------------------------------------------------------------
-
-app.post("/api/transcribe", express.raw({ type: "audio/*", limit: "10mb" }), async (req, res) => {
-  try {
-    if (!req.body || req.body.length === 0) {
-      return res.status(400).json({ error: "No audio data received" });
-    }
-
-    const text = await transcribeAudio(req.body, req.headers["content-type"] || "audio/webm");
-    res.json({ text });
-  } catch (err) {
-    console.error("[transcribe] error:", err.message);
-    res.status(500).json({ error: "Transcription failed. Please try again." });
-  }
-});
 
 // SPA fallback — serve index.html for any non-API route
 app.get("*", (_req, res) => {
@@ -505,9 +486,6 @@ httpServer.listen(PORT, () => {
   console.log(`  Network: http://${localIP}:${PORT}\n`);
   if (!process.env.MINIMAX_API_KEY) {
     console.warn("  ⚠  MINIMAX_API_KEY not set — AI judging will fail. Add it to .env");
-  }
-  if (!process.env.SPEECHMATICS_API_KEY) {
-    console.warn("  ⚠  SPEECHMATICS_API_KEY not set — voice input will fail. Add it to .env");
   }
   console.log();
 });

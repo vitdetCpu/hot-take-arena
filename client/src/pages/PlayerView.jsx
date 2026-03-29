@@ -22,11 +22,6 @@ export default function PlayerView() {
   const [hotTake, setHotTake] = useState('');
   const [submitError, setSubmitError] = useState('');
 
-  // Voice input (Speechmatics with Web Speech API fallback)
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
 
   // Results
   const [myResult, setMyResult] = useState(null);
@@ -156,77 +151,6 @@ export default function PlayerView() {
     });
     setPhase('submitted');
   }, [hotTake, joinedRoomCode]);
-
-  // ---------------------------------------------------------------------------
-  // Voice input (Speechmatics via server)
-  // ---------------------------------------------------------------------------
-  const isRecordingRef = useRef(false);
-
-  const handleMicToggle = useCallback(async () => {
-    if (isRecordingRef.current) {
-      mediaRecorderRef.current?.stop();
-      isRecordingRef.current = false;
-      setIsRecording(false);
-      return;
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      setSubmitError('Voice input not supported on this browser');
-      return;
-    }
-
-    isRecordingRef.current = true;
-    setIsRecording(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Pick best supported mime type (iOS Safari needs mp4, not webm)
-      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac']
-        .find((t) => MediaRecorder.isTypeSupported(t)) || '';
-      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-
-        const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
-        if (blob.size === 0) return;
-
-        setIsTranscribing(true);
-        try {
-          const res = await fetch('/api/transcribe', {
-            method: 'POST',
-            headers: { 'Content-Type': mediaRecorder.mimeType },
-            body: blob,
-          });
-          const data = await res.json();
-          if (data.text) {
-            setHotTake((prev) => {
-              const combined = prev ? `${prev} ${data.text}` : data.text;
-              return combined.slice(0, MAX_CHARS);
-            });
-          } else if (data.error) {
-            setSubmitError(`Voice: ${data.error}`);
-          }
-        } catch {
-          setSubmitError('Voice transcription failed');
-        } finally {
-          setIsTranscribing(false);
-        }
-      };
-
-      mediaRecorder.start();
-    } catch {
-      isRecordingRef.current = false;
-      setIsRecording(false);
-      setSubmitError('Microphone access denied');
-    }
-  }, []);
 
   // ---------------------------------------------------------------------------
   // Character count color
@@ -383,10 +307,10 @@ export default function PlayerView() {
             </h2>
           </div>
 
-          {/* Textarea + Mic */}
+          {/* Textarea */}
           <div className="relative">
             <textarea
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 pr-14
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3
                          text-base text-[#e2e8f0] placeholder-[#94a3b8]/50 outline-none
                          focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/30
                          transition-colors resize-none"
@@ -395,46 +319,7 @@ export default function PlayerView() {
               placeholder="Drop your hottest take..."
               value={hotTake}
               onChange={(e) => setHotTake(e.target.value)}
-              disabled={isTranscribing}
             />
-
-            {/* Mic button */}
-            <button
-              type="button"
-              onClick={handleMicToggle}
-              disabled={isTranscribing}
-              className={`absolute top-2 right-2 w-11 h-11 rounded-full flex items-center justify-center
-                         transition-all duration-200 cursor-pointer
-                         ${isRecording
-                           ? 'bg-red-500/20 border-2 border-red-500 animate-pulse-glow'
-                           : isTranscribing
-                             ? 'bg-purple-500/20 border border-purple-500/40'
-                             : 'bg-white/5 border border-white/20 hover:border-purple-500/40 hover:bg-purple-500/10'
-                         }`}
-              aria-label={isRecording ? 'Stop recording' : 'Start voice input'}
-            >
-              {isTranscribing ? (
-                <div className="animate-spin-slow w-5 h-5 rounded-full border-2 border-transparent border-t-purple-500" />
-              ) : (
-                <svg className={`w-5 h-5 ${isRecording ? 'text-red-400' : 'text-[#94a3b8]'}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round"
-                    d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-                </svg>
-              )}
-            </button>
-
-            {/* Recording indicator */}
-            {isRecording && (
-              <div className="absolute -top-7 right-0 text-xs text-red-400 font-semibold animate-fade-in-up">
-                Listening...
-              </div>
-            )}
-            {isTranscribing && (
-              <div className="absolute -top-7 right-0 text-xs text-purple-400 font-semibold animate-fade-in-up">
-                Transcribing...
-              </div>
-            )}
 
             <div
               className="absolute bottom-3 right-3 text-xs font-mono font-bold"

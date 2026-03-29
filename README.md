@@ -7,7 +7,7 @@ Real-time multiplayer opinion battle game. One person hosts on a big screen, eve
 1. Host creates a room and projects the screen
 2. Players scan the QR code to join on their phones
 3. Host picks a prompt (e.g. "What's your most controversial food opinion?")
-4. Everyone submits their hot take (text or voice)
+4. Everyone submits their hot take
 5. AI reads every submission, roasts each one, and scores them 1-10
 6. Results reveal one by one, lowest to highest, building up to the winner
 
@@ -28,7 +28,7 @@ Add your API keys to `.env`:
 
 ```
 MINIMAX_API_KEY=your-key-here
-SPEECHMATICS_API_KEY=your-key-here
+
 ```
 
 Get your keys from:
@@ -66,14 +66,14 @@ client/          React frontend (Vite)
   src/
     pages/
       HostView   Projector screen with QR code, prompt, results reveal
-      PlayerView Mobile view for joining, submitting, voice input
+      PlayerView Mobile view for joining and submitting
     components/
       RevealCard Score-colored result cards with roast text
       WinnerCrown Confetti animation for the winner
 server/
   index.js       Express + Socket.IO server, room management
   minimax.js     AI judge with parallel batched streaming
-  transcribe.js  Speechmatics speech-to-text
+
 ```
 
 ### How AI Judging Works
